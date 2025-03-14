@@ -4,9 +4,15 @@ import ProtectedRoute from "../routes/ProtectedRoute";
 import MainLaout from "../components/layout/MainLayout";
 import Dashboard from "../pages/Dashboard";
 import Login from "../pages/Login";
-import EventGroundsManagement from "../pages/EventGroundsManagement";
-import NotificationCenter from "../pages/NotificationCentre";
 import EventDashboard from "../pages/EventDashboard";
+import VenueManagement from "../pages/VenueManagement";
+import EquipmentManagement from "../pages/EquipmentManagement";
+import BookingsReport from "../pages/BookingsReport";
+import VenueRequests from "../pages/VenueRequests";
+import PerformanceMetrics from "../pages/PerformanceMetrics";
+import ChangePassword from "../pages/ChangePassword";
+import FinancialReport from "../pages/FinancialReport";
+import OrganizersPage from "../pages/OrganizersPage";
 export const router = createBrowserRouter([
   {
     path: "/",
@@ -34,17 +40,17 @@ export const router = createBrowserRouter([
     children: [
       {
         index: true,
-        element: <EventGroundsManagement />,
+        element: <VenueManagement />
       },
     ],
   },
   {
-    path: "/event_request",
+    path: "/venue_request",
     element: <ProtectedRoute element={<MainLaout />} />,
     children: [
       {
         index: true,
-        element: <NotificationCenter />,
+        element: <VenueRequests />
       },
     ],
   },
@@ -58,4 +64,64 @@ export const router = createBrowserRouter([
       },
     ],
   },
+  {
+    path: "/bookings",
+    element: <ProtectedRoute element={<MainLaout />} />,
+    children: [
+      {
+        index: true,
+        element: <BookingsReport />,
+      },
+    ],
+  },
+  {
+    path: "/equipments",
+    element: <ProtectedRoute element={<MainLaout />} />,
+    children: [
+      {
+        index: true,
+        element: <EquipmentManagement />,
+      },
+    ],
+  },
+  {
+    path: "/metrics",
+    element: <ProtectedRoute element={<MainLaout />} />,
+    children: [
+      {
+        index: true,
+        element: <PerformanceMetrics />,
+      },
+    ],
+  },
+  {
+    path: "/settings",
+    element: <ProtectedRoute element={<MainLaout />} />,
+    children: [
+      {
+        index: true,
+        element: <ChangePassword />,
+      },
+    ], 
+  },
+  {
+    path: "/report",
+    element: <ProtectedRoute element={<MainLaout />} />,
+    children: [
+      {
+        index: true,
+        element: <FinancialReport />,
+      },
+    ], 
+  },
+  {
+    path: "/organizers",
+    element: <ProtectedRoute element={<MainLaout />} />,
+    children: [
+      {
+        index: true,
+        element: <OrganizersPage />
+      },
+    ], 
+  }
 ]);

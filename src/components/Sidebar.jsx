@@ -1,5 +1,5 @@
 import { useState } from "react"
-import { Home, Calendar, BookOpen, Bell, Settings, ChevronDown, ChevronRight, Box } from "lucide-react"
+import { Home, Calendar, BookOpen, Settings, ChevronDown, ChevronRight, Box,  ChartNoAxesCombined, ChartCandlestick , Users} from "lucide-react"
 
 export default function Sidebar() {
   const [isEventsOpen, setIsEventsOpen] = useState(false)
@@ -24,6 +24,7 @@ export default function Sidebar() {
           <span>Dashboard</span>
         </a>
 
+       
         <div className="nav-group">
           <button className="nav-item with-submenu" onClick={() => setIsEventsOpen(!isEventsOpen)}>
             <Calendar size={20} />
@@ -40,7 +41,7 @@ export default function Sidebar() {
               <a href="/event_ground" className="submenu-item">
                 Event Grounds
               </a>
-              <a href="/event_request" className="submenu-item">
+              <a href="/venue_request" className="submenu-item">
                 View Requests
               </a>
               <a href="/events" className="submenu-item">
@@ -55,12 +56,23 @@ export default function Sidebar() {
           <span>Bookings</span>
         </a>
 
-        <a href="/notifications" className="nav-item">
-          <Bell size={20} />
-          <span>Notifications</span>
-          <span className="badge">3</span>
+        <a href="/report" className="nav-item">
+          <ChartCandlestick size={20}/>
+          <span>Financial Report</span>
+        </a>
+        
+
+        <a href="/metrics" className="nav-item">
+        <ChartNoAxesCombined size={20} />
+        <span>Metrics</span>
         </a>
 
+        <a href="/organizers" className="nav-item">
+        <Users size={20}/>
+        <span>Event Organizers</span>
+        </a>
+       
+        
         <a href="/settings" className="nav-item">
           <Settings size={20} />
           <span>Settings</span>
@@ -70,7 +82,7 @@ export default function Sidebar() {
       <style jsx>{`
         .sidebar {
           width: 250px;
-          height: 100vh;
+          
           background: white;
           border-right: 1px solid #e5e7eb;
           padding: 1rem;
