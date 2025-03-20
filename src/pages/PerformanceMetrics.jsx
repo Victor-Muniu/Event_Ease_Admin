@@ -28,6 +28,7 @@ import {
   XCircle,
   AlertCircle,
   Search,
+  RefreshCcw,
 } from "lucide-react"
 
 export default function PerformanceMetrics() {
@@ -42,10 +43,40 @@ export default function PerformanceMetrics() {
   })
   const [searchTerm, setSearchTerm] = useState("")
   const [activeTab, setActiveTab] = useState("overview")
+  const [exchangeRate, setExchangeRate] = useState(null)
+  const [exchangeRateLoading, setExchangeRateLoading] = useState(true)
+  const [exchangeRateError, setExchangeRateError] = useState(null)
+  const [lastUpdated, setLastUpdated] = useState(null)
 
   useEffect(() => {
+    fetchExchangeRate()
     fetchBookings()
   }, [])
+
+  const fetchExchangeRate = async () => {
+    try {
+      setExchangeRateLoading(true)
+      // Using a free currency API - in production, you might want to use a more reliable service
+      const response = await fetch("https://open.er-api.com/v6/latest/THB")
+      const data = await response.json()
+
+      if (data && data.rates && data.rates.KES) {
+        setExchangeRate(data.rates.KES)
+        setLastUpdated(new Date())
+      } else {
+        // Fallback rate in case API fails
+        setExchangeRate(0.37) // Example fallback rate: 1 THB = 0.37 KSH
+        setExchangeRateError("Could not fetch current exchange rate, using fallback rate")
+      }
+    } catch (err) {
+      console.error("Error fetching exchange rate:", err)
+      // Fallback rate in case API fails
+      setExchangeRate(0.37) // Example fallback rate: 1 THB = 0.37 KSH
+      setExchangeRateError("Could not fetch current exchange rate, using fallback rate")
+    } finally {
+      setExchangeRateLoading(false)
+    }
+  }
 
   const fetchBookings = async () => {
     try {
@@ -59,6 +90,12 @@ export default function PerformanceMetrics() {
       setError("Failed to load booking data")
       setLoading(false)
     }
+  }
+
+  // Convert THB to KSH
+  const convertCurrency = (thbAmount) => {
+    if (exchangeRate === null) return thbAmount // Return original if rate not loaded
+    return thbAmount * exchangeRate
   }
 
   // Extract unique organizers, venues, and statuses for filters
@@ -104,7 +141,7 @@ export default function PerformanceMetrics() {
     })
   }, [bookings, filters, searchTerm])
 
-  // Calculate summary metrics
+  // Calculate summary metrics with currency conversion
   const summaryMetrics = useMemo(() => {
     if (filteredBookings.length === 0) {
       return {
@@ -121,7 +158,8 @@ export default function PerformanceMetrics() {
     const tentative = filteredBookings.filter((booking) => booking.status === "Tentative").length
     const cancelled = filteredBookings.filter((booking) => booking.status === "Cancelled").length
 
-    const totalRevenue = filteredBookings.reduce((sum, booking) => sum + booking.amountPaid, 0)
+    // Convert THB to KSH for revenue calculations
+    const totalRevenue = filteredBookings.reduce((sum, booking) => sum + convertCurrency(booking.amountPaid), 0)
 
     return {
       totalBookings: filteredBookings.length,
@@ -131,9 +169,9 @@ export default function PerformanceMetrics() {
       totalRevenue: totalRevenue,
       averageBookingValue: totalRevenue / filteredBookings.length,
     }
-  }, [filteredBookings])
+  }, [filteredBookings, exchangeRate])
 
-  // Prepare data for charts
+  // Prepare data for charts with currency conversion
   const venueBookingsData = useMemo(() => {
     const venueCount = {}
 
@@ -207,7 +245,8 @@ export default function PerformanceMetrics() {
       }
 
       organizerStats[organizerName].bookings += 1
-      organizerStats[organizerName].revenue += booking.amountPaid
+      // Convert THB to KSH for revenue
+      organizerStats[organizerName].revenue += convertCurrency(booking.amountPaid)
 
       if (booking.status === "Confirmed") {
         organizerStats[organizerName].confirmed += 1
@@ -219,7 +258,7 @@ export default function PerformanceMetrics() {
     })
 
     return Object.values(organizerStats).sort((a, b) => b.bookings - a.bookings)
-  }, [filteredBookings])
+  }, [filteredBookings, exchangeRate])
 
   const revenueByVenueData = useMemo(() => {
     const venueRevenue = {}
@@ -231,7 +270,8 @@ export default function PerformanceMetrics() {
         venueRevenue[venueName] = 0
       }
 
-      venueRevenue[venueName] += booking.amountPaid
+      // Convert THB to KSH for revenue
+      venueRevenue[venueName] += convertCurrency(booking.amountPaid)
     })
 
     return Object.entries(venueRevenue)
@@ -240,12 +280,12 @@ export default function PerformanceMetrics() {
         revenue,
       }))
       .sort((a, b) => b.revenue - a.revenue)
-  }, [filteredBookings])
+  }, [filteredBookings, exchangeRate])
 
   const formatCurrency = (value) => {
-    return new Intl.NumberFormat("en-US", {
+    return new Intl.NumberFormat("en-KE", {
       style: "currency",
-      currency: "KSH",
+      currency: "KES",
       minimumFractionDigits: 0,
     }).format(value)
   }
@@ -258,7 +298,12 @@ export default function PerformanceMetrics() {
     })
   }
 
-  if (loading) return <div className="loading">Loading performance metrics...</div>
+  const refreshData = () => {
+    fetchExchangeRate()
+    fetchBookings()
+  }
+
+  if (loading || exchangeRateLoading) return <div className="loading">Loading performance metrics...</div>
   if (error) return <div className="error">{error}</div>
 
   return (
@@ -267,9 +312,19 @@ export default function PerformanceMetrics() {
         <div className="header-title">
           <h1>Performance Metrics</h1>
           <p className="subtitle">Analyze booking trends, venue popularity, and revenue</p>
+          {exchangeRate && (
+            <div className="exchange-rate-info">
+              <span>Exchange Rate: 1 THB = {exchangeRate.toFixed(4)} KSH</span>
+              {lastUpdated && <span> • Last updated: {lastUpdated.toLocaleTimeString()}</span>}
+              <button className="refresh-rate-btn" onClick={fetchExchangeRate} title="Refresh exchange rate">
+                <RefreshCcw size={14} />
+              </button>
+              {exchangeRateError && <div className="exchange-rate-error">{exchangeRateError}</div>}
+            </div>
+          )}
         </div>
         <div className="header-actions">
-          <button className="action-button refresh" onClick={fetchBookings}>
+          <button className="action-button refresh" onClick={refreshData}>
             <RefreshCw size={16} />
             <span>Refresh Data</span>
           </button>
@@ -545,8 +600,8 @@ export default function PerformanceMetrics() {
                   <BarChart data={revenueByVenueData.slice(0, 5)}>
                     <CartesianGrid strokeDasharray="3 3" />
                     <XAxis dataKey="name" />
-                    <YAxis tickFormatter={(value) => `$${value}`} />
-                    <Tooltip formatter={(value) => [`$${value}`, "Revenue"]} />
+                    <YAxis tickFormatter={(value) => `${formatCurrency(value).split(".")[0]}`} />
+                    <Tooltip formatter={(value) => [formatCurrency(value), "Revenue"]} />
                     <Bar dataKey="revenue" fill="#8b5cf6" />
                   </BarChart>
                 </ResponsiveContainer>
@@ -562,10 +617,10 @@ export default function PerformanceMetrics() {
                   <BarChart data={organizerPerformanceData.slice(0, 5)}>
                     <CartesianGrid strokeDasharray="3 3" />
                     <XAxis dataKey="name" />
-                    <YAxis tickFormatter={(value) => `$${value}`} />
+                    <YAxis tickFormatter={(value) => `${formatCurrency(value).split(".")[0]}`} />
                     <Tooltip
                       formatter={(value, name) => [
-                        name === "revenue" ? `$${value}` : value,
+                        name === "revenue" ? formatCurrency(value) : value,
                         name === "revenue" ? "Revenue" : "Bookings",
                       ]}
                     />
@@ -604,7 +659,8 @@ export default function PerformanceMetrics() {
                   const tentative = venueBookings.filter((b) => b.status === "Tentative").length
                   const cancelled = venueBookings.filter((b) => b.status === "Cancelled").length
 
-                  const revenue = venueBookings.reduce((sum, b) => sum + b.amountPaid, 0)
+                  // Convert THB to KSH for revenue
+                  const revenue = venueBookings.reduce((sum, b) => sum + convertCurrency(b.amountPaid), 0)
                   const avgValue = venueBookings.length > 0 ? revenue / venueBookings.length : 0
 
                   return (
@@ -652,8 +708,8 @@ export default function PerformanceMetrics() {
                   <BarChart data={revenueByVenueData}>
                     <CartesianGrid strokeDasharray="3 3" />
                     <XAxis dataKey="name" />
-                    <YAxis tickFormatter={(value) => `$${value}`} />
-                    <Tooltip formatter={(value) => [`$${value}`, "Revenue"]} />
+                    <YAxis tickFormatter={(value) => `${formatCurrency(value).split(".")[0]}`} />
+                    <Tooltip formatter={(value) => [formatCurrency(value), "Revenue"]} />
                     <Bar dataKey="revenue" fill="#8b5cf6" />
                   </BarChart>
                 </ResponsiveContainer>
@@ -726,8 +782,8 @@ export default function PerformanceMetrics() {
                   <BarChart data={organizerPerformanceData}>
                     <CartesianGrid strokeDasharray="3 3" />
                     <XAxis dataKey="name" />
-                    <YAxis tickFormatter={(value) => `$${value}`} />
-                    <Tooltip formatter={(value) => [`$${value}`, "Revenue"]} />
+                    <YAxis tickFormatter={(value) => `${formatCurrency(value).split(".")[0]}`} />
+                    <Tooltip formatter={(value) => [formatCurrency(value), "Revenue"]} />
                     <Bar dataKey="revenue" fill="#ec4899" />
                   </BarChart>
                 </ResponsiveContainer>
@@ -771,7 +827,7 @@ export default function PerformanceMetrics() {
                   <th>Venue</th>
                   <th>Event Dates</th>
                   <th>Status</th>
-                  <th>Amount</th>
+                  <th>Amount (KSH)</th>
                   <th>Created</th>
                 </tr>
               </thead>
@@ -797,7 +853,7 @@ export default function PerformanceMetrics() {
                       <td>
                         <span className={`status-badge ${booking.status.toLowerCase()}`}>{booking.status}</span>
                       </td>
-                      <td>{formatCurrency(booking.totalAmount)}</td>
+                      <td>{formatCurrency(convertCurrency(booking.totalAmount))}</td>
                       <td>{formatDate(booking.createdAt)}</td>
                     </tr>
                   )
@@ -844,6 +900,38 @@ export default function PerformanceMetrics() {
         .subtitle {
           color: #64748b;
           font-size: 1rem;
+        }
+
+        .exchange-rate-info {
+          margin-top: 0.5rem;
+          font-size: 0.875rem;
+          color: #64748b;
+          display: flex;
+          align-items: center;
+          gap: 0.5rem;
+        }
+
+        .refresh-rate-btn {
+          background: none;
+          border: none;
+          color: #3b82f6;
+          cursor: pointer;
+          padding: 0.25rem;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          border-radius: 50%;
+          transition: background-color 0.2s;
+        }
+
+        .refresh-rate-btn:hover {
+          background-color: #f1f5f9;
+        }
+
+        .exchange-rate-error {
+          color: #ef4444;
+          font-size: 0.75rem;
+          margin-top: 0.25rem;
         }
 
         .header-actions {

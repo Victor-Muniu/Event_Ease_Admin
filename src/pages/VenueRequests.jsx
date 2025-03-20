@@ -1,3 +1,5 @@
+"use client"
+
 import { useState, useEffect } from "react"
 import {
   Search,
@@ -19,6 +21,8 @@ import {
 
 export default function VenueRequests() {
   const [requests, setRequests] = useState([])
+  const [responses, setResponses] = useState([])
+  const [filteredRequests, setFilteredRequests] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [searchTerm, setSearchTerm] = useState("")
@@ -37,19 +41,44 @@ export default function VenueRequests() {
   const [viewMode, setViewMode] = useState("table")
 
   useEffect(() => {
-    fetchRequests()
+    fetchData()
   }, [])
 
-  const fetchRequests = async () => {
+  const fetchData = async () => {
     try {
       setLoading(true)
-      const response = await fetch("http://localhost:3002/venue-requests")
-      const data = await response.json()
-      setRequests(data)
+
+      // Fetch both requests and responses
+      const [requestsResponse, responsesResponse] = await Promise.all([
+        fetch("http://localhost:3002/venue-requests"),
+        fetch("http://localhost:3002/venue-request-responses"),
+      ])
+
+      if (!requestsResponse.ok) {
+        throw new Error("Failed to load venue requests")
+      }
+
+      if (!responsesResponse.ok) {
+        throw new Error("Failed to load venue request responses")
+      }
+
+      const requestsData = await requestsResponse.json()
+      const responsesData = await responsesResponse.json()
+
+      setRequests(requestsData)
+      setResponses(responsesData)
+
+      // Filter out requests that have responses
+      const responseRequestIds = responsesData
+        .filter((response) => response && response.venueRequest)
+        .map((response) => response.venueRequest._id)
+      const requestsWithoutResponses = requestsData.filter((request) => !responseRequestIds.includes(request._id))
+
+      setFilteredRequests(requestsWithoutResponses)
       setLoading(false)
     } catch (err) {
-      console.error("Error fetching venue requests:", err)
-      setError("Failed to load venue requests")
+      console.error("Error fetching data:", err)
+      setError("Failed to load data: " + err.message)
       setLoading(false)
     }
   }
@@ -77,40 +106,6 @@ export default function VenueRequests() {
     setSortConfig({ key, direction })
   }
 
-  const sortedRequests = [...requests].sort((a, b) => {
-    if (sortConfig.key === "eventName") {
-      return sortConfig.direction === "asc"
-        ? a.eventName.localeCompare(b.eventName)
-        : b.eventName.localeCompare(a.eventName)
-    }
-
-    if (sortConfig.key === "venue") {
-      return sortConfig.direction === "asc"
-        ? (a.venue?.name || "").localeCompare(b.venue?.name || "")
-        : (b.venue?.name || "").localeCompare(a.venue?.name)
-    }
-
-    if (sortConfig.key === "organizer") {
-      const aName = `${a.organizer.firstName} ${a.organizer.lastName}`
-      const bName = `${b.organizer.firstName} ${b.organizer.lastName}`
-      return sortConfig.direction === "asc" ? aName.localeCompare(bName) : bName.localeCompare(aName)
-    }
-
-    if (sortConfig.key === "attendance") {
-      return sortConfig.direction === "asc"
-        ? a.expectedAttendance - b.expectedAttendance
-        : b.expectedAttendance - a.expectedAttendance
-    }
-
-    if (sortConfig.key === "requestDate") {
-      return sortConfig.direction === "asc"
-        ? new Date(a.requestDate) - new Date(b.requestDate)
-        : new Date(b.requestDate) - new Date(a.requestDate)
-    }
-
-    return 0
-  })
-
   const getDateRangeFilter = (request) => {
     const requestDate = new Date(request.requestDate)
     const now = new Date()
@@ -135,56 +130,91 @@ export default function VenueRequests() {
     return true // "All Time" or default
   }
 
-  const filteredRequests = sortedRequests.filter((request) => {
-    // Search term filter
-    const searchLower = searchTerm.toLowerCase()
-    const matchesSearch =
-      request.eventName.toLowerCase().includes(searchLower) ||
-      request.venue.name.toLowerCase().includes(searchLower) ||
-      `${request.organizer.firstName} ${request.organizer.lastName}`.toLowerCase().includes(searchLower) ||
-      request.eventDescription.toLowerCase().includes(searchLower)
+  // Apply search and filters to the already filtered requests (those without responses)
+  const displayedRequests = filteredRequests
+    .filter((request) => {
+      // Search term filter
+      const searchLower = searchTerm.toLowerCase()
+      const matchesSearch =
+        request.eventName.toLowerCase().includes(searchLower) ||
+        (request.venue?.name || "").toLowerCase().includes(searchLower) ||
+        `${request.organizer.firstName} ${request.organizer.lastName}`.toLowerCase().includes(searchLower) ||
+        request.eventDescription.toLowerCase().includes(searchLower)
 
-    // Venue filter
-    const matchesVenue = filters.venue === "All Venues" || request.venue?.name === filters.venue
+      // Venue filter
+      const matchesVenue = filters.venue === "All Venues" || request.venue?.name === filters.venue
 
-    // Status filter
-    const matchesStatus =
-      filters.status === "All Status" ||
-      (filters.status === "Read" && request.isRead) ||
-      (filters.status === "Unread" && !request.isRead)
+      // Status filter
+      const matchesStatus =
+        filters.status === "All Status" ||
+        (filters.status === "Read" && request.isRead) ||
+        (filters.status === "Unread" && !request.isRead)
 
-    // Organizer filter
-    const matchesOrganizer =
-      filters.organizer === "All Organizers" ||
-      `${request.organizer.firstName} ${request.organizer.lastName}` === filters.organizer
+      // Organizer filter
+      const matchesOrganizer =
+        filters.organizer === "All Organizers" ||
+        `${request.organizer.firstName} ${request.organizer.lastName}` === filters.organizer
 
-    // Date range filter
-    let matchesDateRange = true
-    if (filters.dateRange !== "All Time") {
-      const requestDate = new Date(request.requestDate)
-      const now = new Date()
+      // Date range filter
+      let matchesDateRange = true
+      if (filters.dateRange !== "All Time") {
+        const requestDate = new Date(request.requestDate)
+        const now = new Date()
 
-      if (filters.dateRange === "Last 7 Days") {
-        const sevenDaysAgo = new Date(now.setDate(now.getDate() - 7))
-        matchesDateRange = requestDate >= sevenDaysAgo
-      } else if (filters.dateRange === "Last 30 Days") {
-        const thirtyDaysAgo = new Date(now.setDate(now.getDate() - 30))
-        matchesDateRange = requestDate >= thirtyDaysAgo
-      } else if (filters.dateRange === "Last 90 Days") {
-        const ninetyDaysAgo = new Date(now.setDate(now.getDate() - 90))
-        matchesDateRange = requestDate >= ninetyDaysAgo
+        if (filters.dateRange === "Last 7 Days") {
+          const sevenDaysAgo = new Date(now.setDate(now.getDate() - 7))
+          matchesDateRange = requestDate >= sevenDaysAgo
+        } else if (filters.dateRange === "Last 30 Days") {
+          const thirtyDaysAgo = new Date(now.setDate(now.getDate() - 30))
+          matchesDateRange = requestDate >= thirtyDaysAgo
+        } else if (filters.dateRange === "Last 90 Days") {
+          const ninetyDaysAgo = new Date(now.setDate(now.getDate() - 90))
+          matchesDateRange = requestDate >= ninetyDaysAgo
+        }
       }
-    }
 
-    // New time frame filter (daily/weekly/monthly)
-    const matchesTimeFrame = getDateRangeFilter(request)
+      // New time frame filter (daily/weekly/monthly)
+      const matchesTimeFrame = getDateRangeFilter(request)
 
-    return matchesSearch && matchesVenue && matchesStatus && matchesOrganizer && matchesDateRange && matchesTimeFrame
-  })
+      return matchesSearch && matchesVenue && matchesStatus && matchesOrganizer && matchesDateRange && matchesTimeFrame
+    })
+    .sort((a, b) => {
+      if (sortConfig.key === "eventName") {
+        return sortConfig.direction === "asc"
+          ? a.eventName.localeCompare(b.eventName)
+          : b.eventName.localeCompare(a.eventName)
+      }
+
+      if (sortConfig.key === "venue") {
+        return sortConfig.direction === "asc"
+          ? (a.venue?.name || "").localeCompare(b.venue?.name || "")
+          : (b.venue?.name || "").localeCompare(a.venue?.name || "")
+      }
+
+      if (sortConfig.key === "organizer") {
+        const aName = `${a.organizer.firstName} ${a.organizer.lastName}`
+        const bName = `${b.organizer.firstName} ${b.organizer.lastName}`
+        return sortConfig.direction === "asc" ? aName.localeCompare(bName) : bName.localeCompare(aName)
+      }
+
+      if (sortConfig.key === "attendance") {
+        return sortConfig.direction === "asc"
+          ? a.expectedAttendance - b.expectedAttendance
+          : b.expectedAttendance - a.expectedAttendance
+      }
+
+      if (sortConfig.key === "requestDate") {
+        return sortConfig.direction === "asc"
+          ? new Date(a.requestDate) - new Date(b.requestDate)
+          : new Date(b.requestDate) - new Date(a.requestDate)
+      }
+
+      return 0
+    })
 
   // Get unique venues and organizers for filters
-  const venues = [...new Set(requests.filter((r) => r.venue).map((r) => r.venue.name))]
-  const organizers = [...new Set(requests.map((r) => `${r.organizer.firstName} ${r.organizer.lastName}`))]
+  const venues = [...new Set(filteredRequests.filter((r) => r.venue).map((r) => r.venue.name))]
+  const organizers = [...new Set(filteredRequests.map((r) => `${r.organizer.firstName} ${r.organizer.lastName}`))]
 
   const handleViewRequest = (request) => {
     setSelectedRequest(request)
@@ -207,7 +237,9 @@ export default function VenueRequests() {
 
       if (response.ok) {
         // Update local state
-        setRequests(requests.map((req) => (req._id === requestId ? { ...req, isRead: !isCurrentlyRead } : req)))
+        setFilteredRequests(
+          filteredRequests.map((req) => (req._id === requestId ? { ...req, isRead: !isCurrentlyRead } : req)),
+        )
       } else {
         console.error("Failed to update request status")
       }
@@ -216,21 +248,8 @@ export default function VenueRequests() {
     }
   }
 
-  const handleApproveRequest = async (requestId) => {
-    // This would typically send an API request to approve the venue request
-    console.log(`Approving request ${requestId}`)
-    // After approval, you might want to refresh the data or update the UI
-  }
-
-  const handleRejectRequest = async (requestId) => {
-    // This would typically send an API request to reject the venue request
-    console.log(`Rejecting request ${requestId}`)
-    // After rejection, you might want to refresh the data or update the UI
-  }
-
   const handleSendQuotation = async (requestId) => {
     try {
-      // First, send the quotation request
       const quotationResponse = await fetch("http://localhost:3002/venue-request-responses", {
         method: "POST",
         headers: {
@@ -246,7 +265,6 @@ export default function VenueRequests() {
         throw new Error("Failed to send quotation")
       }
 
-      // Then, mark the request as read
       const readResponse = await fetch(`http://localhost:3002/venue-requests/${requestId}`, {
         method: "PATCH",
         headers: {
@@ -258,10 +276,10 @@ export default function VenueRequests() {
 
       if (!readResponse.ok) {
         console.error("Failed to mark request as read")
-      } else {
-        // Update local state to reflect the request is now read
-        setRequests(requests.map((req) => (req._id === requestId ? { ...req, isRead: true } : req)))
       }
+
+      // Remove the request from the filtered list since it now has a response
+      setFilteredRequests(filteredRequests.filter((req) => req._id !== requestId))
 
       // Close the modal after sending quotation
       setSelectedRequest(null)
@@ -281,20 +299,20 @@ export default function VenueRequests() {
     <div className="container">
       <header className="header">
         <div className="header-title">
-          <h1>Venue Requests</h1>
-          <p className="subtitle">Manage and respond to venue booking requests</p>
+          <h1>Pending Venue Requests</h1>
+          <p className="subtitle">Manage and respond to venue booking requests without responses</p>
         </div>
         <div className="header-stats">
           <div className="stat-item">
-            <div className="stat-value">{requests.length}</div>
-            <div className="stat-label">Total Requests</div>
+            <div className="stat-value">{filteredRequests.length}</div>
+            <div className="stat-label">Pending Requests</div>
           </div>
           <div className="stat-item">
-            <div className="stat-value">{requests.filter((r) => !r.isRead).length}</div>
+            <div className="stat-value">{filteredRequests.filter((r) => !r.isRead).length}</div>
             <div className="stat-label">Unread</div>
           </div>
           <div className="stat-item">
-            <div className="stat-value">{requests.filter((r) => r.isRead).length}</div>
+            <div className="stat-value">{filteredRequests.filter((r) => r.isRead).length}</div>
             <div className="stat-label">Reviewed</div>
           </div>
         </div>
@@ -384,10 +402,10 @@ export default function VenueRequests() {
 
       {viewMode === "card" ? (
         <div className="requests-grid">
-          {filteredRequests.length === 0 ? (
-            <div className="no-results">No venue requests match your filters</div>
+          {displayedRequests.length === 0 ? (
+            <div className="no-results">No pending venue requests match your filters</div>
           ) : (
-            filteredRequests.map((request) => (
+            displayedRequests.map((request) => (
               <div key={request._id} className={`request-card ${!request.isRead ? "unread" : ""}`}>
                 <div className="request-header">
                   <h3 className="event-name">{request.eventName}</h3>
@@ -524,14 +542,14 @@ export default function VenueRequests() {
               </tr>
             </thead>
             <tbody>
-              {filteredRequests.length === 0 ? (
+              {displayedRequests.length === 0 ? (
                 <tr>
                   <td colSpan={8} className="no-results-cell">
-                    No venue requests match your filters
+                    No pending venue requests match your filters
                   </td>
                 </tr>
               ) : (
-                filteredRequests.map((request) => (
+                displayedRequests.map((request) => (
                   <tr key={request._id} className={!request.isRead ? "unread-row" : ""}>
                     <td className="status-col">{!request.isRead && <div className="unread-indicator"></div>}</td>
                     <td>{request.eventName}</td>
@@ -571,7 +589,7 @@ export default function VenueRequests() {
                           }}
                           title={request.isRead ? "Mark as unread" : "Mark as read"}
                         >
-                          {request.isRead ? <EyeOff size={16} /> : ""}
+                          {request.isRead ? <EyeOff size={16} /> : " "}
                         </button>
                         <button
                           className="action-btn view-btn"
@@ -668,7 +686,7 @@ export default function VenueRequests() {
                   </div>
                   <div className="detail-item">
                     <span className="detail-label">Organization</span>
-                    <span className="detail-value">{selectedRequest.organizer.organizationName}</span>
+                    <span className="detail-value">{selectedRequest.organizer.organizationName || "N/A"}</span>
                   </div>
                   <div className="detail-item">
                     <span className="detail-label">Email</span>
@@ -676,7 +694,7 @@ export default function VenueRequests() {
                   </div>
                   <div className="detail-item">
                     <span className="detail-label">Phone</span>
-                    <span className="detail-value">{selectedRequest.organizer.phone}</span>
+                    <span className="detail-value">{selectedRequest.organizer.phone || "N/A"}</span>
                   </div>
                 </div>
               </div>
@@ -684,21 +702,27 @@ export default function VenueRequests() {
               <div className="detail-section">
                 <h3>Additional Requests</h3>
                 <div className="additional-requests">
-                  <p>{selectedRequest.additionalRequests}</p>
+                  <p>{selectedRequest.additionalRequests || "None"}</p>
                 </div>
               </div>
             </div>
 
             <div className="modal-footer">
-              <button className="btn-reject" onClick={() => handleRejectRequest(selectedRequest._id)}>
+              <button className="btn-reject" onClick={handleCloseDetails}>
                 <XCircle size={16} />
-                Reject Request
+                Cancel
               </button>
               <button className="btn-quotation" onClick={() => handleSendQuotation(selectedRequest._id)}>
                 <FileText size={16} />
                 Send Quotation
               </button>
-              <button className="btn-approve" onClick={() => handleApproveRequest(selectedRequest._id)}>
+              <button
+                className="btn-approve"
+                onClick={() => {
+                  handleMarkAsRead(selectedRequest._id, false)
+                  handleCloseDetails()
+                }}
+              >
                 <CheckCircle size={16} />
                 Mark as Read
               </button>
@@ -779,7 +803,7 @@ export default function VenueRequests() {
         }
 
         .search-container input {
-          width: 100%;
+          width: 80%;
           padding: 0.75rem 1rem 0.75rem 2.75rem;
           border: 1px solid #e2e8f0;
           border-radius: 0.5rem;
@@ -847,13 +871,6 @@ export default function VenueRequests() {
         .request-card:hover {
           transform: translateY(-2px);
           box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-        }
-
-        .request-card.unread {
-          border-left-color: #3b82f6;
-        }
-
-        0,0,0.1);
         }
 
         .request-card.unread {
@@ -1077,7 +1094,8 @@ export default function VenueRequests() {
         }
 
         .btn-approve,
-        .btn-reject {
+        .btn-reject,
+        .btn-quotation {
           display: flex;
           align-items: center;
           gap: 0.5rem;
@@ -1110,15 +1128,6 @@ export default function VenueRequests() {
         }
 
         .btn-quotation {
-          display: flex;
-          align-items: center;
-          gap: 0.5rem;
-          padding: 0.625rem 1.25rem;
-          border-radius: 0.5rem;
-          font-size: 0.875rem;
-          font-weight: 500;
-          cursor: pointer;
-          transition: all 0.2s;
           background: #6366f1;
           color: white;
           border: none;
@@ -1126,66 +1135,6 @@ export default function VenueRequests() {
 
         .btn-quotation:hover {
           background: #4f46e5;
-        }
-
-        @media (max-width: 1024px) {
-          .detail-grid {
-            grid-template-columns: 1fr;
-          }
-        }
-
-        @media (max-width: 768px) {
-          .container {
-            padding: 1rem;
-          }
-
-          .header {
-            flex-direction: column;
-            align-items: flex-start;
-            gap: 1rem;
-          }
-
-          .header-stats {
-            width: 100%;
-            justify-content: space-between;
-          }
-
-          .filters-container {
-            flex-direction: column;
-            width: 100%;
-          }
-
-          .filter-group {
-            width: 100%;
-          }
-
-          .select-wrapper select {
-            width: 100%;
-          }
-
-          .requests-grid {
-            grid-template-columns: 1fr;
-          }
-        }
-
-        @media (max-width: 480px) {
-          .stat-item {
-            flex: 1;
-          }
-
-          .date-item {
-            width: 100%;
-          }
-
-          .modal-footer {
-            flex-direction: column;
-          }
-
-          .btn-approve,
-          .btn-reject {
-            width: 100%;
-            justify-content: center;
-          }
         }
 
         .view-toggle {
@@ -1356,6 +1305,55 @@ export default function VenueRequests() {
 
           .toggle-btn {
             flex: 1;
+            justify-content: center;
+          }
+          
+          .container {
+            padding: 1rem;
+          }
+
+          .header {
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 1rem;
+          }
+
+          .header-stats {
+            width: 100%;
+            justify-content: space-between;
+          }
+
+          .filters-container {
+            flex-direction: column;
+            width: 100%;
+          }
+
+          .filter-group {
+            width: 100%;
+          }
+
+          .select-wrapper select {
+            width: 100%;
+          }
+        }
+
+        @media (max-width: 480px) {
+          .stat-item {
+            flex: 1;
+          }
+
+          .date-item {
+            width: 100%;
+          }
+
+          .modal-footer {
+            flex-direction: column;
+          }
+
+          .btn-approve,
+          .btn-reject,
+          .btn-quotation {
+            width: 100%;
             justify-content: center;
           }
         }
