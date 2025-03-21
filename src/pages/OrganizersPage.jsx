@@ -406,7 +406,7 @@ export default function OrganizersTableView() {
         }
 
         .search-input {
-          width: 100%;
+          width: 90%;
           padding: 0.75rem 1rem 0.75rem 2.5rem;
           border: 1px solid var(--border-color);
           border-radius: var(--radius-md);

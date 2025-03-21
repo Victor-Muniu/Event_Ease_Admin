@@ -4,7 +4,7 @@ import ProtectedRoute from "../routes/ProtectedRoute";
 import MainLaout from "../components/layout/MainLayout";
 import Dashboard from "../pages/Dashboard";
 import Login from "../pages/Login";
-import EventDashboard from "../pages/EventDashboard";
+
 import VenueManagement from "../pages/VenueManagement";
 import EquipmentManagement from "../pages/EquipmentManagement";
 import BookingsReport from "../pages/BookingsReport";
@@ -13,6 +13,7 @@ import PerformanceMetrics from "../pages/PerformanceMetrics";
 import ChangePassword from "../pages/ChangePassword";
 import FinancialReport from "../pages/FinancialReport";
 import OrganizersPage from "../pages/OrganizersPage";
+import Event from "../pages/Event";
 export const router = createBrowserRouter([
   {
     path: "/",
@@ -60,7 +61,7 @@ export const router = createBrowserRouter([
     children: [
       {
         index: true,
-        element: <EventDashboard />,
+        element: <Event />
       },
     ],
   },

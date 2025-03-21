@@ -45,7 +45,7 @@ export default function Sidebar() {
                 View Requests
               </a>
               <a href="/events" className="submenu-item">
-                Current Events
+                Events
               </a>
             </div>
           )}
