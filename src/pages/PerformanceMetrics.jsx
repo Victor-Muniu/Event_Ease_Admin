@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react"
+import { useState, useEffect, useMemo, useRef } from "react"
 import {
   BarChart,
   Bar,
@@ -29,7 +29,11 @@ import {
   AlertCircle,
   Search,
   RefreshCcw,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react"
+import { jsPDF } from "jspdf"
+import autoTable from "jspdf-autotable"
 
 export default function PerformanceMetrics() {
   const [bookings, setBookings] = useState([])
@@ -47,6 +51,20 @@ export default function PerformanceMetrics() {
   const [exchangeRateLoading, setExchangeRateLoading] = useState(true)
   const [exchangeRateError, setExchangeRateError] = useState(null)
   const [lastUpdated, setLastUpdated] = useState(null)
+
+  // Pagination state
+  const [currentPage, setCurrentPage] = useState(1)
+  const [itemsPerPage] = useState(7) // Set to 7 bookings per page as requested
+
+  // Report generation state
+  const [selectedBookings, setSelectedBookings] = useState({})
+  const [isGeneratingReport, setIsGeneratingReport] = useState(false)
+  const [reportType, setReportType] = useState("summary")
+  const [reportFormat, setReportFormat] = useState("pdf")
+  const [showReportModal, setShowReportModal] = useState(false)
+
+  // Ref for report download
+  const downloadLinkRef = useRef(null)
 
   useEffect(() => {
     fetchExchangeRate()
@@ -140,6 +158,19 @@ export default function PerformanceMetrics() {
       return matchesOrganizer && matchesVenue && matchesStatus && matchesSearch
     })
   }, [bookings, filters, searchTerm])
+
+  // Pagination logic
+  const indexOfLastItem = currentPage * itemsPerPage
+  const indexOfFirstItem = indexOfLastItem - itemsPerPage
+  const currentBookings = filteredBookings.slice(indexOfFirstItem, indexOfLastItem)
+  const totalPages = Math.ceil(filteredBookings.length / itemsPerPage)
+
+  // Handle page change
+  const paginate = (pageNumber) => {
+    if (pageNumber > 0 && pageNumber <= totalPages) {
+      setCurrentPage(pageNumber)
+    }
+  }
 
   // Calculate summary metrics with currency conversion
   const summaryMetrics = useMemo(() => {
@@ -303,6 +334,270 @@ export default function PerformanceMetrics() {
     fetchBookings()
   }
 
+  // Toggle selection of a booking for report generation
+  const toggleBookingSelection = (bookingId) => {
+    setSelectedBookings((prev) => ({
+      ...prev,
+      [bookingId]: !prev[bookingId],
+    }))
+  }
+
+  // Select/deselect all bookings on current page
+  const toggleSelectAllOnPage = () => {
+    const allSelected = currentBookings.every((booking) => selectedBookings[booking._id])
+
+    const newSelections = { ...selectedBookings }
+    currentBookings.forEach((booking) => {
+      newSelections[booking._id] = !allSelected
+    })
+
+    setSelectedBookings(newSelections)
+  }
+
+  // Generate PDF report
+  const generatePdfReport = (reportData, reportType) => {
+    const doc = new jsPDF()
+
+    // Add report title and header
+    const title = reportType === "summary" ? "BOOKING SUMMARY REPORT" : "DETAILED BOOKING REPORT"
+    doc.setFontSize(18)
+    doc.setFont("helvetica", "bold")
+    doc.text(title, 105, 15, { align: "center" })
+
+    // Add report metadata
+    doc.setFontSize(10)
+    doc.setFont("helvetica", "normal")
+    doc.text(`Generated: ${new Date().toLocaleString()}`, 14, 25)
+
+    // Add filters applied
+    let filtersText = "Filters Applied: "
+    if (filters.organizer !== "All Organizers") filtersText += `Organizer: ${filters.organizer}, `
+    if (filters.venue !== "All Venues") filtersText += `Venue: ${filters.venue}, `
+    if (filters.status !== "All Status") filtersText += `Status: ${filters.status}, `
+    if (filters.dateRange !== "All Time") filtersText += `Date Range: ${filters.dateRange}`
+    if (filtersText === "Filters Applied: ") filtersText += "None"
+
+    doc.text(filtersText, 14, 30)
+
+    // Add summary metrics
+    const confirmed = reportData.filter((b) => b.status === "Confirmed").length
+    const tentative = reportData.filter((b) => b.status === "Tentative").length
+    const cancelled = reportData.filter((b) => b.status === "Cancelled").length
+    const totalRevenue = reportData.reduce((sum, b) => sum + convertCurrency(b.amountPaid), 0)
+
+    doc.setFontSize(12)
+    doc.setFont("helvetica", "bold")
+    doc.text("SUMMARY METRICS", 14, 40)
+
+    doc.setFontSize(10)
+    doc.setFont("helvetica", "normal")
+    doc.text(`Total Bookings: ${reportData.length}`, 14, 48)
+    doc.text(`Confirmed Bookings: ${confirmed} (${((confirmed / reportData.length) * 100).toFixed(1)}%)`, 14, 53)
+    doc.text(`Tentative Bookings: ${tentative} (${((tentative / reportData.length) * 100).toFixed(1)}%)`, 14, 58)
+    doc.text(`Cancelled Bookings: ${cancelled} (${((cancelled / reportData.length) * 100).toFixed(1)}%)`, 14, 63)
+    doc.text(`Total Revenue: ${formatCurrency(totalRevenue)}`, 14, 68)
+    doc.text(`Average Booking Value: ${formatCurrency(totalRevenue / reportData.length)}`, 14, 73)
+
+    // Add top venues table
+    doc.setFontSize(12)
+    doc.setFont("helvetica", "bold")
+    doc.text("TOP VENUES", 14, 83)
+
+    // Create venues table
+    const venueTableData = venueBookingsData
+      .slice(0, 5)
+      .map((venue) => [
+        venue.name,
+        venue.bookings.toString(),
+        formatCurrency(revenueByVenueData.find((v) => v.name === venue.name)?.revenue || 0),
+      ])
+
+    autoTable(doc, {
+      startY: 85,
+      head: [["Venue Name", "Bookings", "Revenue"]],
+      body: venueTableData,
+      theme: "grid",
+      headStyles: { fillColor: [59, 130, 246], textColor: 255 },
+      margin: { left: 14, right: 14 },
+    })
+
+    // Add top organizers table
+    doc.setFontSize(12)
+    doc.setFont("helvetica", "bold")
+    const lastTableEndY = doc.lastAutoTable ? doc.lastAutoTable.finalY : 85
+    doc.text("TOP ORGANIZERS", 14, lastTableEndY + 10)
+
+    // Create organizers table
+    const organizerTableData = organizerPerformanceData
+      .slice(0, 5)
+      .map((organizer) => [organizer.name, organizer.bookings.toString(), formatCurrency(organizer.revenue)])
+
+    autoTable(doc, {
+      startY: lastTableEndY + 12,
+      head: [["Organizer Name", "Bookings", "Revenue"]],
+      body: organizerTableData,
+      theme: "grid",
+      headStyles: { fillColor: [59, 130, 246], textColor: 255 },
+      margin: { left: 14, right: 14 },
+    })
+
+    // If detailed report, add booking details
+    if (reportType === "detailed") {
+      doc.addPage()
+
+      doc.setFontSize(14)
+      doc.setFont("helvetica", "bold")
+      doc.text("BOOKING DETAILS", 105, 15, { align: "center" })
+
+      // Create detailed bookings table
+      const bookingTableData = reportData.map((booking) => [
+        booking.response.venueRequest.eventName,
+        `${booking.organizer.firstName} ${booking.organizer.lastName}`,
+        booking.response.venueRequest.venue?.name || "No Venue",
+        booking.status,
+        formatCurrency(convertCurrency(booking.amountPaid)),
+        formatDate(booking.createdAt),
+        booking.response.venueRequest.eventDates.length > 0
+          ? formatDate(booking.response.venueRequest.eventDates[0]) +
+            (booking.response.venueRequest.eventDates.length > 1
+              ? ` +${booking.response.venueRequest.eventDates.length - 1}`
+              : "")
+          : "No dates",
+      ])
+
+      autoTable(doc, {
+        startY: 25,
+        head: [["Event Name", "Organizer", "Venue", "Status", "Amount", "Created", "Event Date"]],
+        body: bookingTableData,
+        theme: "grid",
+        headStyles: { fillColor: [59, 130, 246], textColor: 255 },
+        margin: { left: 10, right: 10 },
+        styles: { fontSize: 8 },
+        columnStyles: {
+          0: { cellWidth: 30 },
+          1: { cellWidth: 30 },
+          2: { cellWidth: 30 },
+          3: { cellWidth: 20 },
+          4: { cellWidth: 20 },
+          5: { cellWidth: 20 },
+          6: { cellWidth: 30 },
+        },
+      })
+    }
+
+    // Status distribution chart (if we had canvas support, we could add charts)
+
+    // Save the PDF
+    doc.save(`booking-report-${new Date().toISOString().split("T")[0]}.pdf`)
+  }
+
+  // Generate report based on selected bookings
+  const generateReport = () => {
+    setIsGeneratingReport(true)
+
+    // Get selected bookings data
+    const selectedBookingsData = filteredBookings.filter((booking) => selectedBookings[booking._id])
+
+    // If no bookings selected, use all filtered bookings
+    const reportData = selectedBookingsData.length > 0 ? selectedBookingsData : filteredBookings
+
+    // Generate report based on format
+    if (reportFormat === "pdf") {
+      generatePdfReport(reportData, reportType)
+
+      // Clean up
+      setTimeout(() => {
+        setIsGeneratingReport(false)
+        setShowReportModal(false)
+      }, 100)
+      return
+    }
+
+    // For non-PDF formats (text or CSV)
+    let reportContent = ""
+
+    if (reportType === "summary") {
+      // Summary report
+      const confirmed = reportData.filter((b) => b.status === "Confirmed").length
+      const tentative = reportData.filter((b) => b.status === "Tentative").length
+      const cancelled = reportData.filter((b) => b.status === "Cancelled").length
+      const totalRevenue = reportData.reduce((sum, b) => sum + convertCurrency(b.amountPaid), 0)
+
+      reportContent = `BOOKING SUMMARY REPORT
+Generated: ${new Date().toLocaleString()}
+Filters Applied: ${filters.organizer !== "All Organizers" ? `Organizer: ${filters.organizer}, ` : ""}${filters.venue !== "All Venues" ? `Venue: ${filters.venue}, ` : ""}${filters.status !== "All Status" ? `Status: ${filters.status}, ` : ""}${filters.dateRange !== "All Time" ? `Date Range: ${filters.dateRange}` : ""}
+
+SUMMARY METRICS:
+Total Bookings: ${reportData.length}
+Confirmed Bookings: ${confirmed} (${((confirmed / reportData.length) * 100).toFixed(1)}%)
+Tentative Bookings: ${tentative} (${((tentative / reportData.length) * 100).toFixed(1)}%)
+Cancelled Bookings: ${cancelled} (${((cancelled / reportData.length) * 100).toFixed(1)}%)
+Total Revenue: ${formatCurrency(totalRevenue)}
+Average Booking Value: ${formatCurrency(totalRevenue / reportData.length)}
+
+TOP VENUES:
+${venueBookingsData
+  .slice(0, 5)
+  .map((v) => `${v.name}: ${v.bookings} bookings`)
+  .join("\n")}
+
+TOP ORGANIZERS:
+${organizerPerformanceData
+  .slice(0, 5)
+  .map((o) => `${o.name}: ${o.bookings} bookings, ${formatCurrency(o.revenue)}`)
+  .join("\n")}
+`
+    } else if (reportType === "detailed") {
+      // Detailed report with all bookings
+      reportContent = `DETAILED BOOKING REPORT
+Generated: ${new Date().toLocaleString()}
+Filters Applied: ${filters.organizer !== "All Organizers" ? `Organizer: ${filters.organizer}, ` : ""}${filters.venue !== "All Venues" ? `Venue: ${filters.venue}, ` : ""}${filters.status !== "All Status" ? `Status: ${filters.status}, ` : ""}${filters.dateRange !== "All Time" ? `Date Range: ${filters.dateRange}` : ""}
+Total Bookings: ${reportData.length}
+
+BOOKING DETAILS:
+${reportData
+  .map((booking, index) => {
+    return `
+${index + 1}. Event: ${booking.response.venueRequest.eventName}
+   Organizer: ${booking.organizer.firstName} ${booking.organizer.lastName}
+   Venue: ${booking.response.venueRequest.venue?.name || "No Venue"}
+   Status: ${booking.status}
+   Amount: ${formatCurrency(convertCurrency(booking.amountPaid))}
+   Created: ${formatDate(booking.createdAt)}
+   Event Dates: ${booking.response.venueRequest.eventDates.map((date) => formatDate(date)).join(", ")}
+`
+  })
+  .join("")}
+`
+    } else if (reportType === "csv") {
+      // CSV format for spreadsheet import
+      reportContent = `Event Name,Organizer,Venue,Status,Amount (KSH),Created Date,Event Dates\n`
+      reportContent += reportData
+        .map((booking) => {
+          return `"${booking.response.venueRequest.eventName}","${booking.organizer.firstName} ${booking.organizer.lastName}","${booking.response.venueRequest.venue?.name || "No Venue"}","${booking.status}","${convertCurrency(booking.amountPaid)}","${formatDate(booking.createdAt)}","${booking.response.venueRequest.eventDates.map((date) => formatDate(date)).join("; ")}"`
+        })
+        .join("\n")
+    }
+
+    // Create downloadable file
+    const blob = new Blob([reportContent], { type: reportFormat === "csv" ? "text/csv" : "text/plain" })
+    const url = URL.createObjectURL(blob)
+
+    // Set download link properties
+    if (downloadLinkRef.current) {
+      downloadLinkRef.current.href = url
+      downloadLinkRef.current.download = `booking-report-${new Date().toISOString().split("T")[0]}.${reportFormat === "csv" ? "csv" : "txt"}`
+      downloadLinkRef.current.click()
+    }
+
+    // Clean up
+    setTimeout(() => {
+      URL.revokeObjectURL(url)
+      setIsGeneratingReport(false)
+      setShowReportModal(false)
+    }, 100)
+  }
+
   if (loading || exchangeRateLoading) return <div className="loading">Loading performance metrics...</div>
   if (error) return <div className="error">{error}</div>
 
@@ -328,7 +623,7 @@ export default function PerformanceMetrics() {
             <RefreshCw size={16} />
             <span>Refresh Data</span>
           </button>
-          <button className="action-button export">
+          <button className="action-button export" onClick={() => setShowReportModal(true)}>
             <Download size={16} />
             <span>Export Report</span>
           </button>
@@ -822,6 +1117,16 @@ export default function PerformanceMetrics() {
             <table className="data-table">
               <thead>
                 <tr>
+                  <th>
+                    <input
+                      type="checkbox"
+                      checked={
+                        currentBookings.length > 0 && currentBookings.every((booking) => selectedBookings[booking._id])
+                      }
+                      onChange={toggleSelectAllOnPage}
+                      className="select-checkbox"
+                    />
+                  </th>
                   <th>Event Name</th>
                   <th>Organizer</th>
                   <th>Venue</th>
@@ -832,11 +1137,19 @@ export default function PerformanceMetrics() {
                 </tr>
               </thead>
               <tbody>
-                {filteredBookings.map((booking) => {
+                {currentBookings.map((booking) => {
                   const eventDates = booking.response.venueRequest.eventDates
 
                   return (
                     <tr key={booking._id}>
+                      <td>
+                        <input
+                          type="checkbox"
+                          checked={!!selectedBookings[booking._id]}
+                          onChange={() => toggleBookingSelection(booking._id)}
+                          className="select-checkbox"
+                        />
+                      </td>
                       <td>{booking.response.venueRequest.eventName}</td>
                       <td>{`${booking.organizer.firstName} ${booking.organizer.lastName}`}</td>
                       <td>{booking.response.venueRequest.venue?.name || "No venue"}</td>
@@ -861,8 +1174,174 @@ export default function PerformanceMetrics() {
               </tbody>
             </table>
           </div>
+
+          {/* Pagination controls */}
+          <div className="pagination-container">
+            <div className="pagination-info">
+              Showing {indexOfFirstItem + 1}-{Math.min(indexOfLastItem, filteredBookings.length)} of{" "}
+              {filteredBookings.length} bookings
+            </div>
+            <div className="pagination-controls">
+              <button
+                className="pagination-button"
+                onClick={() => paginate(currentPage - 1)}
+                disabled={currentPage === 1}
+              >
+                <ChevronLeft size={16} />
+                <span>Previous</span>
+              </button>
+
+              {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                // Show pages around current page
+                let pageNum
+                if (totalPages <= 5) {
+                  pageNum = i + 1
+                } else if (currentPage <= 3) {
+                  pageNum = i + 1
+                } else if (currentPage >= totalPages - 2) {
+                  pageNum = totalPages - 4 + i
+                } else {
+                  pageNum = currentPage - 2 + i
+                }
+
+                return (
+                  <button
+                    key={pageNum}
+                    className={`pagination-number ${currentPage === pageNum ? "active" : ""}`}
+                    onClick={() => paginate(pageNum)}
+                  >
+                    {pageNum}
+                  </button>
+                )
+              })}
+
+              <button
+                className="pagination-button"
+                onClick={() => paginate(currentPage + 1)}
+                disabled={currentPage === totalPages}
+              >
+                <span>Next</span>
+                <ChevronRight size={16} />
+              </button>
+            </div>
+          </div>
         </div>
       )}
+
+      {/* Report Generation Modal */}
+      {showReportModal && (
+        <div className="modal-overlay">
+          <div className="report-modal">
+            <div className="modal-header">
+              <h2>Generate Report</h2>
+              <button className="close-button" onClick={() => setShowReportModal(false)}>
+                ×
+              </button>
+            </div>
+
+            <div className="modal-content">
+              <p>Generate a report based on your current filters and selections.</p>
+
+              <div className="report-options">
+                <div className="option-group">
+                  <h3>Report Type</h3>
+                  <div className="radio-group">
+                    <label>
+                      <input
+                        type="radio"
+                        name="reportType"
+                        value="summary"
+                        checked={reportType === "summary"}
+                        onChange={() => setReportType("summary")}
+                      />
+                      Summary Report
+                    </label>
+                    <label>
+                      <input
+                        type="radio"
+                        name="reportType"
+                        value="detailed"
+                        checked={reportType === "detailed"}
+                        onChange={() => setReportType("detailed")}
+                      />
+                      Detailed Report
+                    </label>
+                    <label>
+                      <input
+                        type="radio"
+                        name="reportType"
+                        value="csv"
+                        checked={reportType === "csv"}
+                        onChange={() => setReportType("csv")}
+                      />
+                      CSV Export
+                    </label>
+                  </div>
+                </div>
+
+                <div className="option-group">
+                  <h3>Report Format</h3>
+                  <div className="radio-group">
+                    <label>
+                      <input
+                        type="radio"
+                        name="reportFormat"
+                        value="pdf"
+                        checked={reportFormat === "pdf"}
+                        onChange={() => setReportFormat("pdf")}
+                      />
+                      PDF Document
+                    </label>
+                    <label>
+                      <input
+                        type="radio"
+                        name="reportFormat"
+                        value="txt"
+                        checked={reportFormat === "txt"}
+                        onChange={() => setReportFormat("txt")}
+                        disabled={reportType === "csv"}
+                      />
+                      Text File
+                    </label>
+                    <label>
+                      <input
+                        type="radio"
+                        name="reportFormat"
+                        value="csv"
+                        checked={reportFormat === "csv"}
+                        onChange={() => setReportFormat("csv")}
+                        disabled={reportType !== "csv"}
+                      />
+                      CSV File
+                    </label>
+                  </div>
+                </div>
+
+                <div className="option-group">
+                  <h3>Data Selection</h3>
+                  <p className="selection-info">
+                    {Object.values(selectedBookings).filter(Boolean).length > 0
+                      ? `${Object.values(selectedBookings).filter(Boolean).length} bookings selected`
+                      : "No bookings selected - report will include all filtered bookings"}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="modal-footer">
+              <button className="cancel-button" onClick={() => setShowReportModal(false)}>
+                Cancel
+              </button>
+              <button className="generate-button" onClick={generateReport} disabled={isGeneratingReport}>
+                {isGeneratingReport ? "Generating..." : "Generate Report"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Hidden download link for report */}
+      <a ref={downloadLinkRef} style={{ display: "none" }}></a>
 
       <style jsx>{`
         .metrics-container {
@@ -1303,6 +1782,226 @@ export default function PerformanceMetrics() {
           font-size: 0.75rem;
           color: #64748b;
         }
+        
+        /* Pagination styles */
+        .pagination-container {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          margin-top: 1.5rem;
+        }
+        
+        .pagination-info {
+          font-size: 0.875rem;
+          color: #64748b;
+        }
+        
+        .pagination-controls {
+          display: flex;
+          align-items: center;
+          gap: 0.5rem;
+        }
+        
+        .pagination-button {
+          display: flex;
+          align-items: center;
+          gap: 0.5rem;
+          padding: 0.5rem 0.75rem;
+          border: 1px solid #e2e8f0;
+          border-radius: 0.375rem;
+          background: white;
+          font-size: 0.875rem;
+          color: #64748b;
+          cursor: pointer;
+          transition: all 0.2s;
+        }
+        
+        .pagination-button:hover:not(:disabled) {
+          background: #f8fafc;
+          color: #0f172a;
+        }
+        
+        .pagination-button:disabled {
+          opacity: 0.5;
+          cursor: not-allowed;
+        }
+        
+        .pagination-number {
+          width: 2.5rem;
+          height: 2.5rem;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          border: 1px solid #e2e8f0;
+          border-radius: 0.375rem;
+          background: white;
+          font-size: 0.875rem;
+          color: #64748b;
+          cursor: pointer;
+          transition: all 0.2s;
+        }
+        
+        .pagination-number:hover {
+          background: #f8fafc;
+          color: #0f172a;
+        }
+        
+        .pagination-number.active {
+          background: #3b82f6;
+          color: white;
+          border-color: #3b82f6;
+        }
+        
+        /* Checkbox styles */
+        .select-checkbox {
+          width: 1.25rem;
+          height: 1.25rem;
+          cursor: pointer;
+        }
+        
+        /* Modal styles */
+        .modal-overlay {
+          position: fixed;
+          top: 0;
+          left: 0;
+          right: 0;
+          bottom: 0;
+          background: rgba(0, 0, 0, 0.5);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 1000;
+        }
+        
+        .report-modal {
+          background: white;
+          border-radius: 0.75rem;
+          width: 90%;
+          max-width: 600px;
+          box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
+          overflow: hidden;
+        }
+        
+        .modal-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          padding: 1.5rem;
+          border-bottom: 1px solid #e2e8f0;
+        }
+        
+        .modal-header h2 {
+          font-size: 1.25rem;
+          font-weight: 600;
+          color: #0f172a;
+          margin: 0;
+        }
+        
+        .close-button {
+          background: none;
+          border: none;
+          font-size: 1.5rem;
+          color: #64748b;
+          cursor: pointer;
+          padding: 0.25rem;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          border-radius: 50%;
+          width: 2rem;
+          height: 2rem;
+          transition: background-color 0.2s;
+        }
+        
+        .close-button:hover {
+          background-color: #f1f5f9;
+          color: #0f172a;
+        }
+        
+        .modal-content {
+          padding: 1.5rem;
+        }
+        
+        .report-options {
+          margin-top: 1.5rem;
+        }
+        
+        .option-group {
+          margin-bottom: 1.5rem;
+        }
+        
+        .option-group h3 {
+          font-size: 1rem;
+          font-weight: 600;
+          color: #0f172a;
+          margin-bottom: 0.75rem;
+        }
+        
+        .radio-group {
+          display: flex;
+          flex-direction: column;
+          gap: 0.75rem;
+        }
+        
+        .radio-group label {
+          display: flex;
+          align-items: center;
+          gap: 0.5rem;
+          font-size: 0.875rem;
+          color: #1e293b;
+          cursor: pointer;
+        }
+        
+        .selection-info {
+          font-size: 0.875rem;
+          color: #64748b;
+          margin-top: 0.5rem;
+        }
+        
+        .modal-footer {
+          display: flex;
+          justify-content: flex-end;
+          gap: 1rem;
+          padding: 1.5rem;
+          border-top: 1px solid #e2e8f0;
+        }
+        
+        .cancel-button {
+          padding: 0.625rem 1.25rem;
+          border-radius: 0.375rem;
+          font-size: 0.875rem;
+          font-weight: 500;
+          background: white;
+          color: #0f172a;
+          border: 1px solid #e2e8f0;
+          cursor: pointer;
+          transition: all 0.2s;
+        }
+        
+        .cancel-button:hover {
+          background: #f8fafc;
+        }
+        
+        .generate-button {
+          padding: 0.625rem 1.25rem;
+          border-radius: 0.375rem;
+          font-size: 0.875rem;
+          font-weight: 500;
+          background: #3b82f6;
+          color: white;
+          border: none;
+          cursor: pointer;
+          transition: all 0.2s;
+        }
+        
+        .generate-button:hover:not(:disabled) {
+          background: #2563eb;
+        }
+        
+        .generate-button:disabled {
+          opacity: 0.5;
+          cursor: not-allowed;
+        }
 
         @media (max-width: 1024px) {
           .chart-row {
@@ -1351,11 +2050,30 @@ export default function PerformanceMetrics() {
           .tab-button {
             white-space: nowrap;
           }
+          
+          .pagination-container {
+            flex-direction: column;
+            gap: 1rem;
+            align-items: flex-start;
+          }
+          
+          .report-modal {
+            width: 95%;
+          }
         }
 
         @media (max-width: 480px) {
           .summary-cards {
             grid-template-columns: 1fr;
+          }
+          
+          .pagination-controls {
+            width: 100%;
+            justify-content: space-between;
+          }
+          
+          .pagination-number:not(.active) {
+            display: none;
           }
         }
       `}</style>
